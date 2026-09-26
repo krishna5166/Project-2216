@@ -4,8 +4,10 @@ import logging
 
 from .analytics import AnalyticalEngine, Vote
 from .config import Config
+from .external_signals import ExternalSignalCache
 from .meta_controller import MetaController, Signal
 from .risk import RiskEngine
+from .risk_gate import RiskGate
 from .strategy import SmaCrossoverStrategy
 from .strategy import Signal as StrategySignal
 
@@ -50,9 +52,12 @@ class TradingBot:
         self.risk_engine = RiskEngine()
         self.strategy = SmaCrossoverStrategy(config.short_window, config.long_window)
         self.analytics = AnalyticalEngine()
-        self.meta = MetaController(engine_names=["decision", "analytical"])
+        self.external_signals = ExternalSignalCache()
+        self.meta = MetaController(engine_names=["decision", "analytical", "external"])
+        self.risk_gate = RiskGate()
         self._last_votes: dict | None = None
         self._last_signal: Signal | None = None
+        self._session_started = False
 
         if config.dry_run:
             from .simulation import SimulatedDataFeed, SimulatedExecutionLayer
@@ -90,6 +95,10 @@ class TradingBot:
 
     def _on_price(self, symbol: str, price: float) -> None:
         self.execution.mark_price(price)
+        if not self._session_started:
+            self.risk_gate.start_session(self.execution.get_equity())
+            self._session_started = True
+
         risk_level, size_multiplier = self.risk_engine.update(price)
 
         decision_signal = _STRATEGY_TO_SIGNAL[self.strategy.update(price)]
@@ -98,9 +107,15 @@ class TradingBot:
         analytical_vote, analytical_conf = self.analytics.update(price)
         analytical_signal = _VOTE_TO_SIGNAL[analytical_vote]
 
+        # Not wired to a real Jev/LLM backend yet (see external_signals.py) —
+        # confidence is 0 until one is, so this never moves the combined vote.
+        external = self.external_signals.get()
+        external_signal = Signal.HOLD if external.confidence == 0 else (Signal.LONG if external.value > 0 else Signal.SHORT)
+
         votes = {
             "decision": (decision_signal, decision_conf),
             "analytical": (analytical_signal, analytical_conf),
+            "external": (external_signal, external.confidence),
         }
         final_signal = self.meta.combine(votes)
 
@@ -115,6 +130,11 @@ class TradingBot:
         equity = self.execution.get_equity()
         qty = position_qty(equity, price, size_multiplier)
         if qty <= 0:
+            return
+
+        allowed, reason = self.risk_gate.allow(equity, qty, price)
+        if not allowed:
+            logger.warning("Risk gate blocked %s order for %s: %s", final_signal.value, symbol, reason)
             return
 
         logger.info(
@@ -155,6 +175,7 @@ class TradingBot:
             return
 
         self.execution.close_position(symbol)
+        self.risk_gate.record_trade_result(pnl)
         if self._last_votes is not None and self._last_signal is not None:
             # The trade was profitable iff we stayed in the direction we opened;
             # a loss means that direction was the wrong call.

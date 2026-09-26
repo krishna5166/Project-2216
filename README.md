@@ -26,6 +26,26 @@ SMA-crossover strategy connected end to end, runnable either against Alpaca
   price feed and paper-paper execution layer with the same interface as the
   real ones, so the whole loop can be demoed and tested without any
   credentials or network access.
+- **Analytical engine** (`algotrader/analytics.py`): an online logistic-
+  regression price-direction predictor calibrated via split conformal
+  prediction — abstains unless statistically confident instead of guessing
+  every tick.
+- **Meta-controller** (`algotrader/meta_controller.py`): combines the SMA
+  decision engine's vote and the analytical engine's vote via multiplicative
+  weights (Hedge algorithm); whichever engine is actually right over time
+  earns more say in the combined decision.
+- **Risk gate** (`algotrader/risk_gate.py`): the last checkpoint before an
+  order goes out — hard daily-loss limit, a cap on how much of the account
+  a single position can use, and a kill switch (`KILL_SWITCH=true` env var,
+  or auto-tripped once the daily loss limit is breached). Separate from the
+  risk *engine*, which only sizes positions — this can only ever say no.
+- **External signal cache** (`algotrader/external_signals.py`): the slot for
+  a future Jev regime classifier or LLM news-sentiment score. The decision
+  loop only ever reads a cached value — instant, synchronous, never a
+  network call — so a slow AI API can be added later without touching the
+  per-tick hot path. Currently stubbed: returns a neutral signal with zero
+  confidence until a real backend is wired in (no Jev API access confirmed
+  yet, and LLM sentiment needs its own key/cost budget decision).
 
 ## Setup
 
@@ -70,12 +90,18 @@ simulated data feed / execution layer) — none need a live API connection.
 
 ## Next steps
 
-- Backtest the SMA crossover against historical data before trusting live
-  paper-trading results.
-- Replace rule-based risk thresholds with a model trained on historical
-  volatility once enough paper-trading data exists.
-- Add sentiment/news scoring and a fast decision-layer model as separate,
-  optional inputs to the strategy layer — keep the core loop working without
-  them first.
+- Backtest against real historical data (Alpaca's historical bars API) before
+  trusting any paper-trading results — dry-run currently uses a synthetic
+  random walk, and waiting on live paper trading alone to accumulate enough
+  ticks for training/validation would take too long.
+- A tick recorder + replay tool, so live behavior can be checked against
+  recorded history (catches the backtest-to-live gap).
+- Swap the analytical engine's online logistic model for XGBoost trained
+  offline on recorded/historical data, keeping the conformal-calibration
+  wrapper (it's model-agnostic).
+- Wire a real backend into `external_signals.py` — a Jev regime classifier
+  and/or an LLM news-sentiment scorer, running as a cold-path background
+  worker that calls `.set()` on its own schedule. Needs API keys/access
+  decisions the project owner hasn't made yet.
 - Exercise the real Alpaca websocket/trading API against a real paper
   account (not yet done in this environment — no keys available here).
