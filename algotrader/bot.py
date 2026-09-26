@@ -2,9 +2,12 @@ import argparse
 import asyncio
 import logging
 
+from .analytics import AnalyticalEngine, Vote
 from .config import Config
+from .meta_controller import MetaController, Signal
 from .risk import RiskEngine
-from .strategy import SmaCrossoverStrategy, Signal
+from .strategy import SmaCrossoverStrategy
+from .strategy import Signal as StrategySignal
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +21,17 @@ _BASE_POSITION_FRACTION = 0.1
 
 # Backoff schedule (seconds) for reconnecting the live data feed after a drop.
 _RECONNECT_BACKOFF = [1, 2, 5, 10, 30]
+
+_STRATEGY_TO_SIGNAL = {
+    StrategySignal.LONG: Signal.LONG,
+    StrategySignal.SHORT: Signal.SHORT,
+    StrategySignal.HOLD: Signal.HOLD,
+}
+_VOTE_TO_SIGNAL = {
+    Vote.UP: Signal.LONG,
+    Vote.DOWN: Signal.SHORT,
+    Vote.ABSTAIN: Signal.HOLD,
+}
 
 
 def dynamic_profit_target(base_target: float, equity: float) -> float:
@@ -35,6 +49,10 @@ class TradingBot:
         self.config = config
         self.risk_engine = RiskEngine()
         self.strategy = SmaCrossoverStrategy(config.short_window, config.long_window)
+        self.analytics = AnalyticalEngine()
+        self.meta = MetaController(engine_names=["decision", "analytical"])
+        self._last_votes: dict | None = None
+        self._last_signal: Signal | None = None
 
         if config.dry_run:
             from .simulation import SimulatedDataFeed, SimulatedExecutionLayer
@@ -73,14 +91,25 @@ class TradingBot:
     def _on_price(self, symbol: str, price: float) -> None:
         self.execution.mark_price(price)
         risk_level, size_multiplier = self.risk_engine.update(price)
-        signal = self.strategy.update(price)
+
+        decision_signal = _STRATEGY_TO_SIGNAL[self.strategy.update(price)]
+        decision_conf = 1.0 if decision_signal is not Signal.HOLD else 0.0
+
+        analytical_vote, analytical_conf = self.analytics.update(price)
+        analytical_signal = _VOTE_TO_SIGNAL[analytical_vote]
+
+        votes = {
+            "decision": (decision_signal, decision_conf),
+            "analytical": (analytical_signal, analytical_conf),
+        }
+        final_signal = self.meta.combine(votes)
 
         position = self.execution.get_open_position(symbol)
         if position is not None:
             self._check_hard_exit(position, symbol)
             return
 
-        if signal is Signal.HOLD:
+        if final_signal is Signal.HOLD:
             return
 
         equity = self.execution.get_equity()
@@ -89,32 +118,54 @@ class TradingBot:
             return
 
         logger.info(
-            "Signal=%s risk=%s size_mult=%.2f qty=%s price=%.2f",
-            signal.value,
+            "Final=%s (decision=%s analytical=%s weights=%s) risk=%s size_mult=%.2f qty=%s price=%.2f",
+            final_signal.value,
+            decision_signal.value,
+            analytical_signal.value,
+            {k: round(v, 2) for k, v in self.meta.weights.items()},
             risk_level.value,
             size_multiplier,
             qty,
             price,
         )
-        if signal is Signal.LONG:
+        self._last_votes = votes
+        self._last_signal = final_signal
+        if final_signal is Signal.LONG:
             self.execution.open_long(symbol, qty, price)
-        elif signal is Signal.SHORT:
+        elif final_signal is Signal.SHORT:
             self.execution.open_short(symbol, qty, price)
 
     def _check_hard_exit(self, position, symbol: str) -> None:
-        """Hard exit rule: once the dynamic profit target is hit, close immediately."""
+        """Hard exit rule: once the dynamic profit target is hit, close immediately.
+
+        Also enforces a symmetric stop-loss. Without it, positions would only
+        ever close on a win, so the meta-controller would never see a losing
+        outcome to learn from — the adaptive weighting needs both signs of
+        feedback to mean anything.
+        """
         equity = self.execution.get_equity()
         target = dynamic_profit_target(self.config.base_profit_target, equity)
         pnl = self.execution.unrealized_pl(position)
 
         if pnl >= target:
-            logger.info(
-                "Profit target hit on %s: pnl=%.2f target=%.2f -> closing",
-                symbol,
-                pnl,
-                target,
-            )
-            self.execution.close_position(symbol)
+            logger.info("Profit target hit on %s: pnl=%.2f target=%.2f -> closing", symbol, pnl, target)
+        elif pnl <= -target:
+            logger.info("Stop-loss hit on %s: pnl=%.2f target=-%.2f -> closing", symbol, pnl, target)
+        else:
+            return
+
+        self.execution.close_position(symbol)
+        if self._last_votes is not None and self._last_signal is not None:
+            # The trade was profitable iff we stayed in the direction we opened;
+            # a loss means that direction was the wrong call.
+            outcome = self._last_signal if pnl >= target else self._opposite(self._last_signal)
+            self.meta.update_weights(self._last_votes, trade_direction=outcome)
+            self._last_votes = None
+            self._last_signal = None
+
+    @staticmethod
+    def _opposite(signal: Signal) -> Signal:
+        return Signal.SHORT if signal is Signal.LONG else Signal.LONG
 
 
 def main() -> None:
