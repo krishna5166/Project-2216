@@ -59,6 +59,13 @@ class TradingBot:
         self._last_signal: Signal | None = None
         self._session_started = False
 
+        self._recorder = None
+        if config.record_path:
+            from .recorder import TickRecorder
+
+            self._recorder = TickRecorder(config.record_path)
+            logger.info("Recording ticks to %s", config.record_path)
+
         if config.dry_run:
             from .simulation import SimulatedDataFeed, SimulatedExecutionLayer
 
@@ -94,6 +101,9 @@ class TradingBot:
                 self.data_feed = self._make_data_feed()
 
     def _on_price(self, symbol: str, price: float) -> None:
+        if self._recorder is not None:
+            self._recorder.record(price)
+
         self.execution.mark_price(price)
         if not self._session_started:
             self.risk_gate.start_session(self.execution.get_equity())
