@@ -46,6 +46,17 @@ SMA-crossover strategy connected end to end, runnable either against Alpaca
   per-tick hot path. Currently stubbed: returns a neutral signal with zero
   confidence until a real backend is wired in (no Jev API access confirmed
   yet, and LLM sentiment needs its own key/cost budget decision).
+- **Recorder** (`algotrader/recorder.py`): appends every price the bot sees
+  to a JSONL file (`RECORD_PATH=path/to/session.jsonl`), so a live or
+  paper-trading session can be replayed later.
+- **Backtester** (`algotrader/backtest.py`): replays a list of prices
+  through the exact same pipeline the live bot uses (all engines, the
+  meta-controller, the risk gate) with simulated execution — from a CSV of
+  historical bars or a recorded session — with no sleeping, no network
+  calls.
+- **Historical data fetcher** (`algotrader/historical.py`): pulls real bars
+  from Alpaca into a CSV for the backtester. Needs real API keys — not
+  exercised in this environment, written so it's ready once configured.
 
 ## Setup
 
@@ -78,6 +89,23 @@ Against Alpaca paper trading (needs `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` in `.
 isn't wired up — `paper=True` is hardcoded in `Config` until the strategy is
 proven out on paper first.
 
+Record a session for later replay: `RECORD_PATH=session.jsonl .venv/bin/python main.py --dry-run`
+
+## Backtest
+
+Against real historical data (needs Alpaca keys — see `algotrader/historical.py`):
+
+```bash
+.venv/bin/python -m algotrader.historical --start 2024-01-01 --end 2024-06-01 --out history.csv
+.venv/bin/python -m algotrader.backtest --csv history.csv
+```
+
+Against a recorded live/paper session, to check live behavior matches backtest behavior:
+
+```bash
+.venv/bin/python -m algotrader.backtest --jsonl session.jsonl
+```
+
 ## Tests
 
 ```bash
@@ -90,12 +118,10 @@ simulated data feed / execution layer) — none need a live API connection.
 
 ## Next steps
 
-- Backtest against real historical data (Alpaca's historical bars API) before
-  trusting any paper-trading results — dry-run currently uses a synthetic
-  random walk, and waiting on live paper trading alone to accumulate enough
-  ticks for training/validation would take too long.
-- A tick recorder + replay tool, so live behavior can be checked against
-  recorded history (catches the backtest-to-live gap).
+- Actually run the backtester against real Alpaca historical data (needs
+  keys not available in this environment) — so far only exercised against a
+  synthetic random walk and a recorded dry-run session, so real predictive
+  value on genuine market data is still unverified.
 - Swap the analytical engine's online logistic model for XGBoost trained
   offline on recorded/historical data, keeping the conformal-calibration
   wrapper (it's model-agnostic).
