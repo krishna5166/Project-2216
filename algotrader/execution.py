@@ -25,10 +25,16 @@ class ExecutionLayer:
     def unrealized_pl(self, position) -> float:
         return float(position.unrealized_pl)
 
-    def open_long(self, symbol: str, qty: float) -> None:
+    def mark_price(self, price: float) -> None:
+        """No-op for live trading; Alpaca tracks unrealized P/L itself.
+
+        Kept so bot.py can treat live and simulated execution identically.
+        """
+
+    def open_long(self, symbol: str, qty: float, price: float) -> None:
         self._submit(symbol, qty, OrderSide.BUY)
 
-    def open_short(self, symbol: str, qty: float) -> None:
+    def open_short(self, symbol: str, qty: float, price: float) -> None:
         self._submit(symbol, qty, OrderSide.SELL)
 
     def close_position(self, symbol: str) -> None:
