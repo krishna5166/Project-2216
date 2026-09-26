@@ -51,7 +51,14 @@ class TradingBot:
         self.config = config
         self.risk_engine = RiskEngine()
         self.strategy = SmaCrossoverStrategy(config.short_window, config.long_window)
-        self.analytics = AnalyticalEngine()
+
+        analytical_model = None
+        if config.model_path:
+            from .models import XGBoostModel
+
+            analytical_model = XGBoostModel.load(config.model_path)
+            logger.info("Loaded trained analytical model from %s", config.model_path)
+        self.analytics = AnalyticalEngine(model=analytical_model)
         self.external_signals = ExternalSignalCache()
         self.meta = MetaController(engine_names=["decision", "analytical", "external"])
         self.risk_gate = RiskGate()
