@@ -110,6 +110,20 @@ class TradingBot:
                 except Exception:
                     logger.exception("Reconcile after reconnect failed")
 
+    def _engines_agree(self, decision: Signal, analytical: Signal, combined: Signal) -> bool:
+        """Hold unless SMA and the analytical engine name the same side.
+
+        External is ignored here until it has a real feed. Combined must match
+        that side so a weighted majority cannot override a split vote.
+        """
+        if not self.config.require_engine_agreement:
+            return True
+        if decision is Signal.HOLD or analytical is Signal.HOLD:
+            return False
+        if decision is not analytical:
+            return False
+        return combined is decision
+
     def _on_price(self, symbol: str, price: float) -> None:
         if self._recorder is not None:
             self._recorder.record(price)
@@ -148,6 +162,8 @@ class TradingBot:
 
         final_signal = self.meta.combine(votes)
         if final_signal is Signal.HOLD:
+            return
+        if not self._engines_agree(decision_signal, analytical_signal, final_signal):
             return
 
         qty = position_qty(snap.equity, price, size_multiplier)

@@ -20,6 +20,7 @@ class Config:
     model_path: str | None = None
     state_path: str | None = None
     slip_bps: float = 0.0
+    require_engine_agreement: bool = True
 
 
 def _truthy(name: str, default: str = "") -> bool:
@@ -39,6 +40,7 @@ def load_config(dry_run_override: bool | None = None) -> Config:
             "or run with --dry-run / DRY_RUN=true to use simulated data and orders."
         )
 
+    agreement_default = "true"
     return Config(
         api_key=api_key,
         secret_key=secret_key,
@@ -52,4 +54,5 @@ def load_config(dry_run_override: bool | None = None) -> Config:
         model_path=os.environ.get("MODEL_PATH") or None,
         state_path=os.environ.get("STATE_PATH") or None,
         slip_bps=float(os.environ.get("SLIP_BPS", "0") or 0),
+        require_engine_agreement=_truthy("REQUIRE_ENGINE_AGREEMENT", agreement_default),
     )

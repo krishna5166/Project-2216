@@ -12,6 +12,7 @@ def _make_bot(**overrides) -> TradingBot:
         short_window=2,
         long_window=4,
         dry_run=True,
+        require_engine_agreement=False,
         **overrides,
     )
     return TradingBot(config)
@@ -72,3 +73,12 @@ def test_daily_loss_limit_trip_blocks_further_trades_same_session():
         bot._on_price(symbol, price)
     assert bot.execution.position(symbol) is None
     assert len(bot.execution.trade_log) == 1
+
+
+def test_agreement_gate_blocks_when_analytics_abstains():
+    bot = _make_bot(require_engine_agreement=True)
+    symbol = bot.config.symbol
+    for price in [10, 10, 10, 10, 20]:
+        bot._on_price(symbol, price)
+    assert bot.execution.position(symbol) is None
+    assert bot.execution.trade_log == []
