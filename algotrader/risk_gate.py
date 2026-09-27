@@ -1,11 +1,6 @@
-"""Risk gate: the last checkpoint before an order is submitted.
+"""Last checkpoint before an order. Can only say no."""
 
-Separate from RiskEngine (which scores volatility to size positions). This
-gate can only ever say no — hard daily-loss limit, a cap on how much of the
-account a single position can use, and a kill switch (manual via env var, or
-auto-tripped once the daily loss limit is breached). Nothing about market
-view or strategy logic lives here, only "are we allowed to act."
-"""
+from __future__ import annotations
 
 import os
 from dataclasses import dataclass
@@ -23,6 +18,27 @@ class RiskGate:
         self._tripped = False
         self._trip_reason: str | None = None
         self._session_date: date | None = None
+
+    def snapshot_state(self) -> dict:
+        return {
+            "start_of_session_equity": self._start_of_session_equity,
+            "daily_realized_pnl": self._daily_realized_pnl,
+            "tripped": self._tripped,
+            "trip_reason": self._trip_reason,
+            "session_date": self._session_date.isoformat() if self._session_date else None,
+        }
+
+    def load_state(self, state: dict) -> None:
+        self._start_of_session_equity = state.get("start_of_session_equity")
+        self._daily_realized_pnl = float(state.get("daily_realized_pnl") or 0.0)
+        self._tripped = bool(state.get("tripped"))
+        self._trip_reason = state.get("trip_reason")
+        raw = state.get("session_date")
+        self._session_date = date.fromisoformat(raw) if raw else None
+
+    @property
+    def has_active_session(self) -> bool:
+        return self._session_date is not None
 
     def start_session(self, equity: float) -> None:
         self._start_of_session_equity = equity
@@ -53,17 +69,11 @@ class RiskGate:
 
     def allow(self, equity: float, qty: float, price: float) -> tuple[bool, str | None]:
         if self._session_date is not None and self._today() != self._session_date:
-            # A new calendar day (UTC) has started since the last check — the
-            # daily-loss limit and any auto-trip reset against today's equity,
-            # so a long-running deployment doesn't stay tripped forever on
-            # yesterday's loss.
             self.start_session(equity)
-
         if self._tripped:
             return False, self._trip_reason
         if self._manual_kill_switch_active():
             return False, "Manual kill switch active (KILL_SWITCH env var)"
-
         position_value = qty * price
         max_position_value = self.max_position_fraction * equity
         if position_value > max_position_value:

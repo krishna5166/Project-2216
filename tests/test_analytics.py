@@ -1,11 +1,11 @@
 import random
 
-from algotrader.analytics import AnalyticalEngine, ConformalCalibrator, Vote
+from algotrader.analytics import AnalyticalEngine, ConformalCalibrator
+from algotrader.domain import Vote
 
 
 def test_abstains_with_insufficient_history():
-    engine = AnalyticalEngine()
-    vote, conf = engine.update(100.0)
+    vote, conf = AnalyticalEngine().update(100.0)
     assert vote is Vote.ABSTAIN
     assert conf == 0.0
 
@@ -19,7 +19,6 @@ def test_abstains_until_calibrated_even_with_long_history():
         price += random.gauss(0, 0.5)
         vote, _ = engine.update(price)
         votes.append(vote)
-    # Calibration window (200 resolved labels) can't fill from only 60 ticks.
     assert all(v is Vote.ABSTAIN for v in votes)
 
 
@@ -37,5 +36,4 @@ def test_conformal_prediction_set_for_confident_correct_model():
     for _ in range(100):
         calibrator.record(0.95, True)
         calibrator.record(0.05, False)
-    # A new strongly "up" prediction should land in {"up"} only.
     assert calibrator.prediction_set(0.95) == {"up"}

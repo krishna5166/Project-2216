@@ -1,49 +1,25 @@
+"""Orchestrator: one hot path, no broker calls except through ExecutionPort."""
+
+from __future__ import annotations
+
 import argparse
 import asyncio
 import logging
 
-from .analytics import AnalyticalEngine, Vote
+from .analytics import AnalyticalEngine
 from .config import Config
+from .domain import Signal, Side
 from .external_signals import ExternalSignalCache
-from .meta_controller import MetaController, Signal
+from .meta_controller import MetaController
 from .risk import RiskEngine
 from .risk_gate import RiskGate
+from .sizing import dynamic_profit_target, position_qty
+from .state import StateStore
 from .strategy import SmaCrossoverStrategy
-from .strategy import Signal as StrategySignal
 
 logger = logging.getLogger(__name__)
 
-# Reference equity the base profit target was calibrated against; the actual
-# target scales proportionally with current equity from here.
-_REFERENCE_EQUITY = 1000.0
-
-# Fraction of equity (adjusted by the risk engine's size multiplier) to commit
-# to a single position.
-_BASE_POSITION_FRACTION = 0.1
-
-# Backoff schedule (seconds) for reconnecting the live data feed after a drop.
-_RECONNECT_BACKOFF = [1, 2, 5, 10, 30]
-
-_STRATEGY_TO_SIGNAL = {
-    StrategySignal.LONG: Signal.LONG,
-    StrategySignal.SHORT: Signal.SHORT,
-    StrategySignal.HOLD: Signal.HOLD,
-}
-_VOTE_TO_SIGNAL = {
-    Vote.UP: Signal.LONG,
-    Vote.DOWN: Signal.SHORT,
-    Vote.ABSTAIN: Signal.HOLD,
-}
-
-
-def dynamic_profit_target(base_target: float, equity: float) -> float:
-    return base_target * (equity / _REFERENCE_EQUITY)
-
-
-def position_qty(equity: float, price: float, size_multiplier: float) -> float:
-    dollars = equity * _BASE_POSITION_FRACTION * size_multiplier
-    qty = dollars / price
-    return round(qty, 4)
+_RECONNECT_BACKOFF = (1, 2, 5, 10, 30)
 
 
 class TradingBot:
@@ -65,6 +41,8 @@ class TradingBot:
         self._last_votes: dict | None = None
         self._last_signal: Signal | None = None
         self._session_started = False
+        self._store = StateStore(config.state_path)
+        self._restore_state()
 
         self._recorder = None
         if config.record_path:
@@ -77,7 +55,7 @@ class TradingBot:
             from .simulation import SimulatedDataFeed, SimulatedExecutionLayer
 
             logger.info("Running in DRY-RUN mode: simulated prices and orders, no API calls")
-            self.execution = SimulatedExecutionLayer()
+            self.execution = SimulatedExecutionLayer(slip_bps=config.slip_bps)
             self._make_data_feed = lambda: SimulatedDataFeed()
         else:
             from .data_feed import DataFeed
@@ -88,9 +66,26 @@ class TradingBot:
 
         self.data_feed = self._make_data_feed()
 
+    def _restore_state(self) -> None:
+        payload = self._store.load()
+        if not payload:
+            return
+        if "weights" in payload:
+            self.meta.load_weights(payload["weights"])
+        if "risk_gate" in payload:
+            self.risk_gate.load_state(payload["risk_gate"])
+            self._session_started = self.risk_gate.has_active_session
+
+    def _persist_state(self) -> None:
+        self._store.save({"weights": self.meta.weights, "risk_gate": self.risk_gate.snapshot_state()})
+
     async def run(self) -> None:
         symbol = self.config.symbol
         logger.info("Starting bot for %s (paper=%s, dry_run=%s)", symbol, self.config.paper, self.config.dry_run)
+        try:
+            self.execution.reconcile(symbol)
+        except Exception:
+            logger.exception("Startup reconcile failed; continuing with empty local book")
 
         attempt = 0
         while True:
@@ -105,51 +100,61 @@ class TradingBot:
                 logger.exception("Data feed error; reconnecting in %ss", delay)
                 attempt += 1
                 await asyncio.sleep(delay)
+                try:
+                    await self.data_feed.aclose()
+                except Exception:
+                    pass
                 self.data_feed = self._make_data_feed()
+                try:
+                    self.execution.reconcile(symbol)
+                except Exception:
+                    logger.exception("Reconcile after reconnect failed")
 
     def _on_price(self, symbol: str, price: float) -> None:
         if self._recorder is not None:
             self._recorder.record(price)
 
-        self.execution.mark_price(price)
+        self.execution.mark(price)
+        snap = self.execution.snapshot()
+
         if not self._session_started:
-            self.risk_gate.start_session(self.execution.get_equity())
+            self.risk_gate.start_session(snap.equity)
             self._session_started = True
+            self._persist_state()
 
         risk_level, size_multiplier = self.risk_engine.update(price)
-
-        decision_signal = _STRATEGY_TO_SIGNAL[self.strategy.update(price)]
+        decision_signal = self.strategy.update(price)
         decision_conf = 1.0 if decision_signal is not Signal.HOLD else 0.0
+        analytical_signal, analytical_conf = self.analytics.update(price)
 
-        analytical_vote, analytical_conf = self.analytics.update(price)
-        analytical_signal = _VOTE_TO_SIGNAL[analytical_vote]
-
-        # Not wired to a real Jev/LLM backend yet (see external_signals.py) —
-        # confidence is 0 until one is, so this never moves the combined vote.
         external = self.external_signals.get()
-        external_signal = Signal.HOLD if external.confidence == 0 else (Signal.LONG if external.value > 0 else Signal.SHORT)
+        if external.confidence == 0:
+            external_signal = Signal.HOLD
+        elif external.value > 0:
+            external_signal = Signal.LONG
+        else:
+            external_signal = Signal.SHORT
 
         votes = {
             "decision": (decision_signal, decision_conf),
             "analytical": (analytical_signal, analytical_conf),
             "external": (external_signal, external.confidence),
         }
-        final_signal = self.meta.combine(votes)
 
-        position = self.execution.get_open_position(symbol)
+        position = snap.position
         if position is not None:
-            self._check_hard_exit(position, symbol)
+            self._check_hard_exit(position, symbol, price)
             return
 
+        final_signal = self.meta.combine(votes)
         if final_signal is Signal.HOLD:
             return
 
-        equity = self.execution.get_equity()
-        qty = position_qty(equity, price, size_multiplier)
+        qty = position_qty(snap.equity, price, size_multiplier)
         if qty <= 0:
             return
 
-        allowed, reason = self.risk_gate.allow(equity, qty, price)
+        allowed, reason = self.risk_gate.allow(snap.equity, qty, price)
         if not allowed:
             logger.warning("Risk gate blocked %s order for %s: %s", final_signal.value, symbol, reason)
             return
@@ -165,24 +170,18 @@ class TradingBot:
             qty,
             price,
         )
+        side = Side.LONG if final_signal is Signal.LONG else Side.SHORT
+        fill = self.execution.submit(symbol, side, qty, price)
+        if fill is None:
+            logger.warning("Submit returned no fill; not tracking votes for %s", symbol)
+            return
         self._last_votes = votes
         self._last_signal = final_signal
-        if final_signal is Signal.LONG:
-            self.execution.open_long(symbol, qty, price)
-        elif final_signal is Signal.SHORT:
-            self.execution.open_short(symbol, qty, price)
 
-    def _check_hard_exit(self, position, symbol: str) -> None:
-        """Hard exit rule: once the dynamic profit target is hit, close immediately.
-
-        Also enforces a symmetric stop-loss. Without it, positions would only
-        ever close on a win, so the meta-controller would never see a losing
-        outcome to learn from — the adaptive weighting needs both signs of
-        feedback to mean anything.
-        """
-        equity = self.execution.get_equity()
+    def _check_hard_exit(self, position, symbol: str, price: float) -> None:
+        equity = self.execution.snapshot().equity
         target = dynamic_profit_target(self.config.base_profit_target, equity)
-        pnl = self.execution.unrealized_pl(position)
+        pnl = position.unrealized_pl
 
         if pnl >= target:
             logger.info("Profit target hit on %s: pnl=%.2f target=%.2f -> closing", symbol, pnl, target)
@@ -191,19 +190,17 @@ class TradingBot:
         else:
             return
 
-        self.execution.close_position(symbol)
-        self.risk_gate.record_trade_result(pnl)
+        fill = self.execution.flatten(symbol, price)
+        if fill is None:
+            return
+        realized = fill.realized_pl
+        self.risk_gate.record_trade_result(realized)
         if self._last_votes is not None and self._last_signal is not None:
-            # The trade was profitable iff we stayed in the direction we opened;
-            # a loss means that direction was the wrong call.
-            outcome = self._last_signal if pnl >= target else self._opposite(self._last_signal)
+            outcome = self._last_signal if realized >= 0 else self._last_signal.opposite()
             self.meta.update_weights(self._last_votes, trade_direction=outcome)
             self._last_votes = None
             self._last_signal = None
-
-    @staticmethod
-    def _opposite(signal: Signal) -> Signal:
-        return Signal.SHORT if signal is Signal.LONG else Signal.LONG
+        self._persist_state()
 
 
 def main() -> None:

@@ -1,4 +1,4 @@
-from algotrader.bot import dynamic_profit_target, position_qty
+from algotrader.sizing import dynamic_profit_target, position_qty
 
 
 def test_target_scales_with_equity():
@@ -8,8 +8,4 @@ def test_target_scales_with_equity():
 
 
 def test_position_qty_scales_with_size_multiplier():
-    equity = 1000.0
-    price = 100.0
-    conservative_qty = position_qty(equity, price, size_multiplier=0.5)
-    aggressive_qty = position_qty(equity, price, size_multiplier=1.5)
-    assert aggressive_qty > conservative_qty
+    assert position_qty(1000.0, 100.0, 1.5) > position_qty(1000.0, 100.0, 0.5)
