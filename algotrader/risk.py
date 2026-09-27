@@ -1,3 +1,5 @@
+"""Volatility targeting: size inverse to realized vol. High vol → smaller."""
+
 from collections import deque
 from enum import Enum
 from statistics import pstdev
@@ -9,46 +11,43 @@ class RiskLevel(Enum):
     AGGRESSIVE = "aggressive"
 
 
-# Rule-based thresholds on trailing return volatility (stddev of pct changes).
-# Placeholder values to tune once paper-trading data is available; the notes
-# call for this to become AI-driven later, but this rule-based version
-# unblocks the rest of the loop first.
-_CONSERVATIVE_MAX = 0.0015
-_MODERATE_MAX = 0.004
-
-_SIZE_MULTIPLIER = {
-    RiskLevel.CONSERVATIVE: 0.5,
-    RiskLevel.MODERATE: 1.0,
-    RiskLevel.AGGRESSIVE: 1.5,
-}
+_TARGET_VOL = 0.002
+_MIN_MULT = 0.25
+_MAX_MULT = 1.25
+_CONSERVATIVE_MIN_VOL = 0.004
+_MODERATE_MIN_VOL = 0.0015
 
 
 class RiskEngine:
-    """Scores trailing volatility and maps it to a risk level and position-size multiplier."""
-
     def __init__(self, window: int = 20):
         self._prices: deque[float] = deque(maxlen=window + 1)
 
     def update(self, price: float) -> tuple[RiskLevel, float]:
         self._prices.append(price)
-        level = self._score()
-        return level, _SIZE_MULTIPLIER[level]
+        vol = self._realized_vol()
+        if vol is None:
+            return RiskLevel.CONSERVATIVE, _MIN_MULT
 
-    def _score(self) -> RiskLevel:
+        raw = _TARGET_VOL / max(vol, 1e-12)
+        mult = min(_MAX_MULT, max(_MIN_MULT, raw))
+
+        if vol >= _CONSERVATIVE_MIN_VOL:
+            level = RiskLevel.CONSERVATIVE
+        elif vol >= _MODERATE_MIN_VOL:
+            level = RiskLevel.MODERATE
+        else:
+            level = RiskLevel.AGGRESSIVE
+        return level, mult
+
+    def _realized_vol(self) -> float | None:
         if len(self._prices) < 3:
-            return RiskLevel.CONSERVATIVE
-
-        returns = [
-            (b - a) / a
-            for a, b in zip(self._prices, list(self._prices)[1:])
-            if a != 0
-        ]
-        if not returns:
-            return RiskLevel.CONSERVATIVE
-
-        volatility = pstdev(returns)
-        if volatility <= _CONSERVATIVE_MAX:
-            return RiskLevel.CONSERVATIVE
-        if volatility <= _MODERATE_MAX:
-            return RiskLevel.MODERATE
-        return RiskLevel.AGGRESSIVE
+            return None
+        returns = []
+        prev = None
+        for price in self._prices:
+            if prev and prev != 0:
+                returns.append((price - prev) / prev)
+            prev = price
+        if len(returns) < 2:
+            return None
+        return pstdev(returns)
