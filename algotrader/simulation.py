@@ -1,4 +1,5 @@
-"""In-process MarketDataPort + ExecutionPort. Instant fill at mark ± slip."""
+"""In-process MarketDataPort + ExecutionPort (+ OrderEventPort).
+Instant fill at mark ± slip; events fire immediately."""
 
 from __future__ import annotations
 
@@ -7,6 +8,7 @@ import logging
 import random
 
 from .domain import AccountSnapshot, Fill, Position, Side
+from .ports import OrderEvent
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,7 @@ class SimulatedExecutionLayer:
         self._last_price = 0.0
         self._slip_bps = slip_bps
         self.trade_log: list[float] = []
+        self._events: list[OrderEvent] = []
 
     def _fill_price(self, side: Side, price: float) -> float:
         if self._slip_bps <= 0:
@@ -45,6 +48,15 @@ class SimulatedExecutionLayer:
         slip = price * (self._slip_bps / 10_000.0)
         return price + slip if side is Side.LONG else price - slip
 
+    # -- OrderEventPort -------------------------------------------------------
+    def drain_events(self) -> list[OrderEvent]:
+        events, self._events = self._events, []
+        return events
+
+    def _emit(self, event: OrderEvent) -> None:
+        self._events.append(event)
+
+    # -- ExecutionPort --------------------------------------------------------
     def mark(self, price: float) -> None:
         self._last_price = price
         if self._position is not None:
@@ -62,8 +74,10 @@ class SimulatedExecutionLayer:
             return None
         px = self._fill_price(side, price)
         self._position = Position(symbol=symbol, side=side, qty=qty, entry_price=px, mark_price=px)
+        event = OrderEvent(symbol, side, qty, px, accepted=True)
+        self._emit(event)
         logger.info("[SIM] fill %s %s qty=%s @ %.4f", side.value, symbol, qty, px)
-        return Fill(symbol=symbol, side=side, qty=qty, price=px)
+        return event.as_fill()
 
     def flatten(self, symbol: str, price: float) -> Fill | None:
         pos = self._position
@@ -76,8 +90,10 @@ class SimulatedExecutionLayer:
         self._cash += pnl
         self.trade_log.append(pnl)
         self._position = None
+        event = OrderEvent(symbol, close_side, pos.qty, px, realized_pl=pnl, accepted=True)
+        self._emit(event)
         logger.info("[SIM] flatten %s pnl=%.2f cash=%.2f", symbol, pnl, self._cash)
-        return Fill(symbol=symbol, side=close_side, qty=pos.qty, price=px, realized_pl=pnl)
+        return event.as_fill()
 
     def reconcile(self, symbol: str) -> AccountSnapshot:
         return self.snapshot()
