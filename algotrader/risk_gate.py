@@ -36,6 +36,10 @@ class RiskGate:
         raw = state.get("session_date")
         self._session_date = date.fromisoformat(raw) if raw else None
 
+    @property
+    def has_active_session(self) -> bool:
+        return self._session_date is not None
+
     def start_session(self, equity: float) -> None:
         self._start_of_session_equity = equity
         self._daily_realized_pnl = 0.0
