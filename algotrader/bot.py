@@ -74,7 +74,7 @@ class TradingBot:
             self.meta.load_weights(payload["weights"])
         if "risk_gate" in payload:
             self.risk_gate.load_state(payload["risk_gate"])
-            self._session_started = self.risk_gate._session_date is not None
+            self._session_started = self.risk_gate.has_active_session
 
     def _persist_state(self) -> None:
         self._store.save({"weights": self.meta.weights, "risk_gate": self.risk_gate.snapshot_state()})
@@ -191,7 +191,9 @@ class TradingBot:
             return
 
         fill = self.execution.flatten(symbol, price)
-        realized = fill.realized_pl if fill is not None else pnl
+        if fill is None:
+            return
+        realized = fill.realized_pl
         self.risk_gate.record_trade_result(realized)
         if self._last_votes is not None and self._last_signal is not None:
             outcome = self._last_signal if realized >= 0 else self._last_signal.opposite()
