@@ -5,7 +5,6 @@ from algotrader.train import build_dataset, label_trade_outcome, train_xgboost_m
 
 
 def test_label_trade_outcome_hits_target_before_stop():
-    # Price drifts up past target first.
     future = [100.1, 100.2, 100.6, 100.3]
     assert label_trade_outcome(100.0, future, target=0.5, stop=0.5) == 1
 
@@ -21,7 +20,7 @@ def test_label_trade_outcome_neither_within_horizon():
 
 
 def test_build_dataset_shapes_match():
-    prices = [100.0 + i * 0.1 for i in range(60)]
+    prices = [100.0 + i * 0.1 for i in range(80)]
     X, y = build_dataset(prices, label_horizon=5)
     assert len(X) == len(y)
     assert len(X) > 0
@@ -30,7 +29,7 @@ def test_build_dataset_shapes_match():
 
 
 def test_build_dataset_uptrend_labels_mostly_up():
-    prices = [100.0 + i * 0.1 for i in range(60)]
+    prices = [100.0 + i * 0.1 for i in range(80)]
     _, y = build_dataset(prices, label_horizon=5, target=0.2, stop=0.2)
     assert sum(y) > len(y) * 0.8
 

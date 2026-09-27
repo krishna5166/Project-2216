@@ -2,10 +2,8 @@
 CSV of historical prices or a recorded live/paper session (the same sources
 the backtester takes).
 
-The label now matches the bot's actual exit: 1 if price hits the profit
-target before the stop within `label_horizon` ticks, else 0. That closes the
-train/serve skew where the model used to predict "up in 5 ticks" but the bot
-exits on a dollar target.
+The label matches the bot's actual exit: 1 if price hits the profit target
+before the stop within `label_horizon` ticks, else 0.
 
 Usage:
     python -m algotrader.train --csv history.csv --out model.json
@@ -16,7 +14,7 @@ Usage:
 import argparse
 import logging
 
-from .features import extract_features
+from .features import MIN_HISTORY, extract_features
 from .models import XGBoostModel
 
 logger = logging.getLogger(__name__)
@@ -46,7 +44,8 @@ def build_dataset(
     """Slide a window over `prices`, extract features, label by trade outcome."""
     X: list[list[float]] = []
     y: list[int] = []
-    for i in range(19, len(prices) - label_horizon):
+    start = MIN_HISTORY - 1
+    for i in range(start, len(prices) - label_horizon):
         features = extract_features(prices[: i + 1])
         if features is None:
             continue
@@ -67,13 +66,6 @@ def train_xgboost_model(
     X, y = build_dataset(prices, label_horizon=label_horizon, target=target, stop=stop)
     logger.info("Built %d training examples from %d prices", len(X), len(prices))
     return XGBoostModel.train(X, y)
-
-
-def _eval_model(model, prices: list[float], config) -> str:
-    from .backtest import run_backtest
-
-    result = run_backtest(prices, config)
-    return str(result)
 
 
 def main() -> None:

@@ -6,21 +6,23 @@ was trained on.
 Six features (was three raw returns):
   ret_1, ret_5, ret_10, ret_20  - returns over 1/5/10/20 ticks
   realized_vol                 - std of the last 10 one-tick returns
-  range                        - (max - min) / last over the 20-tick window
+  range                        - (max - min) / last over the lookback window
 """
 
 import math
 
 N_FEATURES = 6
+# ret(20) indexes window[-1-20] = window[-21], so we need 21 prices.
+MIN_HISTORY = 21
 
 
 def extract_features(prices: list[float]) -> list[float] | None:
     """`prices` must end with the price to extract features for, and needs at
-    least 20 points of history. Returns None if there isn't enough history.
+    least MIN_HISTORY points. Returns None if there isn't enough history.
     """
-    if len(prices) < 20:
+    if len(prices) < MIN_HISTORY:
         return None
-    window = prices[-20:]
+    window = prices[-MIN_HISTORY:]
     last = window[-1]
     if not last:
         return None
@@ -34,7 +36,6 @@ def extract_features(prices: list[float]) -> list[float] | None:
     r10 = ret(10)
     r20 = ret(20)
 
-    # Realized vol over the last 10 one-tick returns.
     rets = [
         (window[i] - window[i - 1]) / window[i - 1]
         for i in range(1, len(window))
@@ -48,5 +49,4 @@ def extract_features(prices: list[float]) -> list[float] | None:
         vol = 0.0
 
     rng = (max(window) - min(window)) / last
-
     return [r1 * 100, r5 * 100, r10 * 100, r20 * 100, vol * 100, rng * 100]
