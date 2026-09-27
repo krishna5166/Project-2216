@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from algotrader.risk_gate import RiskGate
 
 
@@ -44,3 +46,28 @@ def test_start_session_resets_trip_state():
 
     gate.start_session(equity=940.0)
     assert gate.allow(equity=940.0, qty=1.0, price=100.0)[0] is True
+
+
+def test_new_calendar_day_auto_resets_trip_state(monkeypatch):
+    gate = RiskGate(max_daily_loss_fraction=0.05)
+    gate.start_session(equity=1000.0)
+    gate.record_trade_result(-60.0)
+    assert gate.allow(equity=940.0, qty=1.0, price=100.0)[0] is False
+
+    # Simulate the next day starting, without anyone calling start_session again.
+    tomorrow = RiskGate._today() + timedelta(days=1)
+    monkeypatch.setattr(RiskGate, "_today", staticmethod(lambda: tomorrow))
+    allowed, reason = gate.allow(equity=940.0, qty=1.0, price=100.0)
+    assert allowed is True
+    assert reason is None
+
+
+def test_same_calendar_day_does_not_reset(monkeypatch):
+    gate = RiskGate(max_daily_loss_fraction=0.05)
+    gate.start_session(equity=1000.0)
+    gate.record_trade_result(-60.0)
+
+    today = RiskGate._today()
+    monkeypatch.setattr(RiskGate, "_today", staticmethod(lambda: today))
+    allowed, _ = gate.allow(equity=940.0, qty=1.0, price=100.0)
+    assert allowed is False

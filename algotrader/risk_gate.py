@@ -9,6 +9,7 @@ view or strategy logic lives here, only "are we allowed to act."
 
 import os
 from dataclasses import dataclass
+from datetime import date, datetime, timezone
 
 
 @dataclass
@@ -21,12 +22,14 @@ class RiskGate:
         self._daily_realized_pnl = 0.0
         self._tripped = False
         self._trip_reason: str | None = None
+        self._session_date: date | None = None
 
     def start_session(self, equity: float) -> None:
         self._start_of_session_equity = equity
         self._daily_realized_pnl = 0.0
         self._tripped = False
         self._trip_reason = None
+        self._session_date = self._today()
 
     def record_trade_result(self, pnl: float) -> None:
         self._daily_realized_pnl += pnl
@@ -41,10 +44,21 @@ class RiskGate:
             )
 
     @staticmethod
+    def _today() -> date:
+        return datetime.now(timezone.utc).date()
+
+    @staticmethod
     def _manual_kill_switch_active() -> bool:
         return os.environ.get("KILL_SWITCH", "").lower() in ("1", "true", "yes")
 
     def allow(self, equity: float, qty: float, price: float) -> tuple[bool, str | None]:
+        if self._session_date is not None and self._today() != self._session_date:
+            # A new calendar day (UTC) has started since the last check — the
+            # daily-loss limit and any auto-trip reset against today's equity,
+            # so a long-running deployment doesn't stay tripped forever on
+            # yesterday's loss.
+            self.start_session(equity)
+
         if self._tripped:
             return False, self._trip_reason
         if self._manual_kill_switch_active():

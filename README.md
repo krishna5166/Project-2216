@@ -40,7 +40,9 @@ SMA-crossover strategy connected end to end, runnable either against Alpaca
 - **Risk gate** (`algotrader/risk_gate.py`): the last checkpoint before an
   order goes out — hard daily-loss limit, a cap on how much of the account
   a single position can use, and a kill switch (`KILL_SWITCH=true` env var,
-  or auto-tripped once the daily loss limit is breached). Separate from the
+  or auto-tripped once the daily loss limit is breached). Resets
+  automatically at UTC calendar-day rollover, so a long-running deployment
+  doesn't stay tripped forever on a previous day's loss. Separate from the
   risk *engine*, which only sizes positions — this can only ever say no.
 - **External signal cache** (`algotrader/external_signals.py`): the slot for
   a future Jev regime classifier or LLM news-sentiment score. The decision
@@ -147,8 +149,14 @@ win-rate / drawdown / Sharpe metrics.
 ```
 
 Covers the pure-logic pieces (strategy signal generation, risk scoring,
-position sizing / dynamic profit target math, dry-run config, and the
-simulated data feed / execution layer) — none need a live API connection.
+position sizing / dynamic profit target math, dry-run config, the simulated
+data feed / execution layer, and the metrics/models/training pipeline), plus
+integration tests (`tests/test_bot_integration.py`) that run the full
+`TradingBot` pipeline end to end — decision + analytical engines voting,
+the meta-controller combining them, a trade opening and closing (win and
+loss), the meta-controller's weights actually shifting afterward, and the
+risk gate (including the daily-loss trip) blocking orders when it should.
+None of this needs a live API connection.
 
 ## Next steps
 
