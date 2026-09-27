@@ -17,6 +17,7 @@ class Config:
     paper: bool = True
     dry_run: bool = False
     record_path: str | None = None
+    model_path: str | None = None
 
 
 def load_config(dry_run_override: bool | None = None) -> Config:
@@ -46,4 +47,5 @@ def load_config(dry_run_override: bool | None = None) -> Config:
         long_window=int(os.environ.get("LONG_WINDOW", "20")),
         dry_run=dry_run,
         record_path=os.environ.get("RECORD_PATH") or None,
+        model_path=os.environ.get("MODEL_PATH") or None,
     )

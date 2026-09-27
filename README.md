@@ -26,10 +26,13 @@ SMA-crossover strategy connected end to end, runnable either against Alpaca
   price feed and paper-paper execution layer with the same interface as the
   real ones, so the whole loop can be demoed and tested without any
   credentials or network access.
-- **Analytical engine** (`algotrader/analytics.py`): an online logistic-
-  regression price-direction predictor calibrated via split conformal
-  prediction — abstains unless statistically confident instead of guessing
-  every tick.
+- **Analytical engine** (`algotrader/analytics.py`): a price-direction
+  predictor calibrated via split conformal prediction — abstains unless
+  statistically confident instead of guessing every tick. The underlying
+  model is pluggable (`algotrader/models.py`): an online logistic regression
+  by default (learns live, zero setup), or a pretrained XGBoost model
+  (`MODEL_PATH=model.json`) trained offline via `algotrader/train.py` on
+  recorded or historical prices.
 - **Meta-controller** (`algotrader/meta_controller.py`): combines the SMA
   decision engine's vote and the analytical engine's vote via multiplicative
   weights (Hedge algorithm); whichever engine is actually right over time
@@ -106,6 +109,18 @@ Against a recorded live/paper session, to check live behavior matches backtest b
 .venv/bin/python -m algotrader.backtest --jsonl session.jsonl
 ```
 
+## Train the analytical engine's XGBoost model
+
+```bash
+.venv/bin/python -m algotrader.train --csv history.csv --out model.json
+MODEL_PATH=model.json .venv/bin/python -m algotrader.backtest --csv history.csv
+MODEL_PATH=model.json .venv/bin/python main.py --dry-run
+```
+
+Without `MODEL_PATH` set, the analytical engine falls back to the online
+logistic model (learns live from ticks as they come in, no training step
+needed).
+
 ## Tests
 
 ```bash
@@ -118,13 +133,13 @@ simulated data feed / execution layer) — none need a live API connection.
 
 ## Next steps
 
-- Actually run the backtester against real Alpaca historical data (needs
-  keys not available in this environment) — so far only exercised against a
-  synthetic random walk and a recorded dry-run session, so real predictive
-  value on genuine market data is still unverified.
-- Swap the analytical engine's online logistic model for XGBoost trained
-  offline on recorded/historical data, keeping the conformal-calibration
-  wrapper (it's model-agnostic).
+- Actually run the backtester (and XGBoost training) against real Alpaca
+  historical data (needs keys not available in this environment) — so far
+  only exercised against a synthetic random walk and a recorded dry-run
+  session. On that synthetic data, the trained XGBoost model performed
+  *worse* than the online logistic model in a backtest — expected, since a
+  pure random walk has no real signal to learn, but a reminder that neither
+  model's predictive value on genuine market data is established yet.
 - Wire a real backend into `external_signals.py` — a Jev regime classifier
   and/or an LLM news-sentiment scorer, running as a cold-path background
   worker that calls `.set()` on its own schedule. Needs API keys/access

@@ -38,15 +38,12 @@ def run_backtest(prices: list[float], config: Config | None = None) -> BacktestR
     if not prices:
         raise ValueError("prices must be non-empty")
 
-    config = config or Config(
-        api_key=None,
-        secret_key=None,
-        symbol="BACKTEST",
-        base_profit_target=1.0,
-        short_window=5,
-        long_window=20,
-        dry_run=True,
-    )
+    if config is None:
+        from .config import load_config
+
+        # dry_run_override=True: never require live API keys for a backtest.
+        # Still picks up MODEL_PATH, SHORT_WINDOW, etc. from the environment.
+        config = load_config(dry_run_override=True)
     if not config.dry_run:
         raise ValueError("backtesting requires a dry_run config (simulated execution)")
 
