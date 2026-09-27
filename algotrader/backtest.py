@@ -1,14 +1,4 @@
-"""Backtester: replays a sequence of prices through the exact same decision
-pipeline the live bot uses (risk engine, decision engine, analytical engine,
-meta-controller, risk gate) with the in-memory simulated execution layer, no
-sleeping, no network calls.
-
-Reuses TradingBot directly rather than duplicating its logic: `run()` is
-never called (that's the async live loop), instead `_on_price` is called
-synchronously for each historical price. Since dry_run always builds a
-SimulatedExecutionLayer, this works whether the source prices are a CSV of
-real historical bars or a recorded live/paper session.
-"""
+"""Replay prices through TradingBot._on_price. No sleep, no network."""
 
 import argparse
 import csv
@@ -44,28 +34,20 @@ class BacktestResult:
 def run_backtest(prices: list[float], config: Config | None = None) -> BacktestResult:
     if not prices:
         raise ValueError("prices must be non-empty")
-
     if config is None:
         from .config import load_config
-
-        # dry_run_override=True: never require live API keys for a backtest.
-        # Still picks up MODEL_PATH, SHORT_WINDOW, etc. from the environment.
         config = load_config(dry_run_override=True)
     if not config.dry_run:
         raise ValueError("backtesting requires a dry_run config (simulated execution)")
-
     bot = TradingBot(config)
-    starting_equity = bot.execution.get_equity()
+    starting_equity = bot.execution.snapshot().cash
     equity_curve = [starting_equity]
-
     for price in prices:
         bot._on_price(config.symbol, price)
-        equity_curve.append(bot.execution.get_equity())
-
-    final_equity = bot.execution.get_equity()
+        equity_curve.append(bot.execution.snapshot().equity)
+    final_equity = bot.execution.snapshot().equity
     return_pct = (final_equity - starting_equity) / starting_equity * 100
     metrics = compute_metrics(equity_curve, bot.execution.trade_log)
-
     return BacktestResult(
         starting_equity=starting_equity,
         final_equity=final_equity,
@@ -76,7 +58,6 @@ def run_backtest(prices: list[float], config: Config | None = None) -> BacktestR
 
 
 def load_prices_from_csv(path: str, column: str = "price") -> list[float]:
-    """Reads a CSV with a `price` (or `close`) column of historical prices."""
     prices = []
     with open(path, newline="") as f:
         reader = csv.DictReader(f)
@@ -89,21 +70,17 @@ def load_prices_from_csv(path: str, column: str = "price") -> list[float]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Backtest the trading bot against historical prices")
     source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--csv", help="CSV file with a 'price' or 'close' column (historical data)")
-    source.add_argument("--jsonl", help="Recorded tick file from TickRecorder (a live/paper session)")
-    parser.add_argument("--column", default="price", help="Column name to read prices from (--csv only)")
+    source.add_argument("--csv")
+    source.add_argument("--jsonl")
+    parser.add_argument("--column", default="price")
     args = parser.parse_args()
-
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if args.csv:
         prices = load_prices_from_csv(args.csv, column=args.column)
     else:
         from .recorder import load_ticks
-
         prices = list(load_ticks(args.jsonl))
-
-    result = run_backtest(prices)
-    print(result)
+    print(run_backtest(prices))
 
 
 if __name__ == "__main__":
