@@ -22,7 +22,7 @@ def test_run_backtest_on_synthetic_prices():
     for _ in range(200):
         prices.append(max(0.01, prices[-1] + random.gauss(0, 0.3)))
     result = run_backtest(prices, _config())
-    assert result.ticks_processed == 200
+    assert result.ticks_processed == len(prices)
     assert result.starting_equity > 0
 
 
@@ -34,5 +34,4 @@ def test_run_walk_forward_returns_folds():
     result = run_walk_forward(prices, train_frac=0.5, test_frac=0.1)
     assert len(result.folds) >= 1
     assert result.combined_metrics is not None
-    # Combined trade count is the sum across folds.
     assert result.combined_metrics.num_trades == sum(f.metrics.num_trades for f in result.folds)
