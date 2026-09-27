@@ -1,5 +1,7 @@
 # Project-2216 — Algorithmic Trading Bot
 
+![Tests](https://github.com/krishna5166/Project-2216/actions/workflows/tests.yml/badge.svg)
+
 Command-line-only automated trading bot. No visual interface, by design, to
 minimize latency and complexity.
 
@@ -157,6 +159,10 @@ the meta-controller combining them, a trade opening and closing (win and
 loss), the meta-controller's weights actually shifting afterward, and the
 risk gate (including the daily-loss trip) blocking orders when it should.
 None of this needs a live API connection.
+
+Runs automatically on every push and pull request via GitHub Actions
+(`.github/workflows/tests.yml`) — nothing merges without the full suite
+passing.
 
 ## Next steps
 
