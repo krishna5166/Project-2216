@@ -12,10 +12,10 @@ from dataclasses import dataclass, field
 
 from .bot import TradingBot
 from .config import Config
-from .features import extract_features
 from .metrics import PerformanceMetrics, compute_metrics
-from .models import XGBoostModel
-from .train import build_dataset, train_xgboost_model
+from .train import train_xgboost_model
+
+DEFAULT_STARTING_EQUITY = 1000.0
 
 
 @dataclass
@@ -25,6 +25,7 @@ class BacktestResult:
     return_pct: float
     ticks_processed: int
     metrics: PerformanceMetrics
+    trade_log: list[float] = field(default_factory=list)
 
     def __str__(self) -> str:
         m = self.metrics
@@ -76,13 +77,15 @@ def run_backtest(prices: list[float], config: Config | None = None) -> BacktestR
         equity_curve.append(bot.execution.snapshot().equity)
     final_equity = bot.execution.snapshot().equity
     return_pct = (final_equity - starting_equity) / starting_equity * 100
-    metrics = compute_metrics(equity_curve, bot.execution.trade_log)
+    trade_log = list(bot.execution.trade_log)
+    metrics = compute_metrics(equity_curve, trade_log)
     return BacktestResult(
         starting_equity=starting_equity,
         final_equity=final_equity,
         return_pct=return_pct,
         ticks_processed=len(prices),
         metrics=metrics,
+        trade_log=trade_log,
     )
 
 
@@ -110,7 +113,6 @@ def run_walk_forward(
     train_end = max(40, int(n * train_frac))
     test_size = max(20, int(n * test_frac))
     folds: list[BacktestResult] = []
-    all_pnls: list[float] = []
     cursor = train_end
     fold_idx = 0
     while cursor + test_size <= n:
@@ -133,27 +135,25 @@ def run_walk_forward(
         )
         result = run_backtest(test_prices, fold_config)
         folds.append(result)
-        all_pnls.extend(
-            bot_trade_log(test_prices, fold_config)
-        )
         cursor += test_size
         fold_idx += 1
+
+    if not folds:
+        return WalkForwardResult(folds=[], combined_metrics=None)
+
+    starting = folds[0].starting_equity or DEFAULT_STARTING_EQUITY
+    all_pnls = [pnl for fold in folds for pnl in fold.trade_log]
     combined = compute_metrics(
-        _equity_curve_from_pnls(all_pnls),
+        _equity_curve_from_pnls(all_pnls, starting_equity=starting),
         all_pnls,
     )
     return WalkForwardResult(folds=folds, combined_metrics=combined)
 
 
-def bot_trade_log(prices: list[float], config: Config) -> list[float]:
-    bot = TradingBot(config)
-    for price in prices:
-        bot._on_price(config.symbol, price)
-    return list(bot.execution.trade_log)
-
-
-def _equity_curve_from_pnls(pnls: list[float]) -> list[float]:
-    curve = [0.0]
+def _equity_curve_from_pnls(
+    pnls: list[float], starting_equity: float = DEFAULT_STARTING_EQUITY
+) -> list[float]:
+    curve = [starting_equity]
     for p in pnls:
         curve.append(curve[-1] + p)
     return curve

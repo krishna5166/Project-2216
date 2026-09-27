@@ -7,7 +7,7 @@ before the stop within `label_horizon` ticks, else 0.
 
 Usage:
     python -m algotrader.train --csv history.csv --out model.json
-    python -m algotrader.train --csv history.csv --out model.json --walk-forward
+    python -m algotrader.train --csv history.csv --walk-forward
     python -m algotrader.train --jsonl session.jsonl --out model.json
 """
 
@@ -82,7 +82,11 @@ def main() -> None:
     )
     parser.add_argument("--target", type=float, default=0.5, help="Profit target used for labeling")
     parser.add_argument("--stop", type=float, default=0.5, help="Stop distance used for labeling")
-    parser.add_argument("--out", required=True, help="Where to save the trained model")
+    parser.add_argument(
+        "--out",
+        default=None,
+        help="Where to save the trained model (required unless --walk-forward)",
+    )
     parser.add_argument(
         "--eval-split",
         type=float,
@@ -109,6 +113,9 @@ def main() -> None:
         help="Fraction of prices per test chunk in --walk-forward",
     )
     args = parser.parse_args()
+
+    if not args.walk_forward and not args.out:
+        parser.error("--out is required unless --walk-forward is set")
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 

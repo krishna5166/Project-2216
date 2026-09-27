@@ -1,7 +1,13 @@
 import random
 
-from algotrader.backtest import run_backtest, run_walk_forward
+from algotrader.backtest import (
+    DEFAULT_STARTING_EQUITY,
+    _equity_curve_from_pnls,
+    run_backtest,
+    run_walk_forward,
+)
 from algotrader.config import Config
+from algotrader.metrics import compute_metrics
 
 
 def _config():
@@ -35,3 +41,18 @@ def test_run_walk_forward_returns_folds():
     assert len(result.folds) >= 1
     assert result.combined_metrics is not None
     assert result.combined_metrics.num_trades == sum(f.metrics.num_trades for f in result.folds)
+    # Combined drawdown is a fraction of starting capital, never > 100%.
+    assert 0.0 <= result.combined_metrics.max_drawdown_pct <= 100.0
+
+
+def test_equity_curve_from_pnls_seeds_starting_capital():
+    curve = _equity_curve_from_pnls([1.2, -1.0], starting_equity=1000.0)
+    assert curve[0] == 1000.0
+    assert curve[-1] == 1000.2
+    metrics = compute_metrics(curve, [1.2, -1.0])
+    assert metrics.max_drawdown_pct < 1.0
+
+
+def test_equity_curve_from_pnls_default_is_sim_starting_equity():
+    curve = _equity_curve_from_pnls([-1.2])
+    assert curve[0] == DEFAULT_STARTING_EQUITY
