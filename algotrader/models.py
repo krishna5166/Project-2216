@@ -14,6 +14,8 @@ the model works internally.
 
 import math
 
+from .features import N_FEATURES
+
 
 def _sigmoid(z: float) -> float:
     if z < -50:
@@ -28,7 +30,7 @@ class OnlineLogisticModel:
 
     trainable_online = True
 
-    def __init__(self, n_features: int = 3, lr: float = 0.05):
+    def __init__(self, n_features: int = N_FEATURES, lr: float = 0.05):
         self.weights = [0.0] * n_features
         self.bias = 0.0
         self.lr = lr

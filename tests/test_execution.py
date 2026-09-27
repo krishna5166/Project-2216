@@ -2,6 +2,8 @@ from types import SimpleNamespace
 
 from algotrader.domain import Side
 from algotrader.execution import ExecutionLayer
+from algotrader.ports import OrderEvent
+from algotrader.simulation import SimulatedExecutionLayer
 
 
 class _Missing(Exception):
@@ -105,3 +107,31 @@ def test_flatten_does_not_record_fill_if_position_still_open():
     assert fill is None
     assert exe.position("AAPL") is not None
     assert broker.close_calls == 1
+
+
+def test_execution_layer_emits_order_events():
+    broker = DelayedBroker(open_404s=0, close_still_open=0)
+    exe = _layer(broker)
+    exe.submit("AAPL", Side.LONG, 1.0, 100.0)
+    events = exe.drain_events()
+    assert len(events) == 1
+    assert isinstance(events[0], OrderEvent)
+    assert events[0].accepted is True
+    assert events[0].side is Side.LONG
+    assert exe.drain_events() == []
+    exe.flatten("AAPL", 101.0)
+    close_events = exe.drain_events()
+    assert len(close_events) == 1
+    assert close_events[0].side is Side.SHORT
+    assert close_events[0].realized_pl == 0.5
+
+
+def test_simulated_execution_emits_order_events_instantly():
+    exe = SimulatedExecutionLayer()
+    fill = exe.submit("AAPL", Side.LONG, 1.0, 100.0)
+    assert fill is not None
+    events = exe.drain_events()
+    assert len(events) == 1
+    assert events[0].accepted is True
+    exe.flatten("AAPL", 101.0)
+    assert exe.drain_events()[0].realized_pl == 1.0

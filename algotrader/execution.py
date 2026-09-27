@@ -1,4 +1,4 @@
-"""Alpaca ExecutionPort. Broker IO only on reconcile / submit / flatten."""
+"""Alpaca ExecutionPort (+ OrderEventPort). Broker IO only on reconcile / submit / flatten."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.requests import MarketOrderRequest
 
 from .domain import AccountSnapshot, Fill, Position, Side
+from .ports import OrderEvent
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,17 @@ class ExecutionLayer:
         self._last_price = 0.0
         self._sleep = sleep
         self._poll_delays = poll_delays
+        self._events: list[OrderEvent] = []
 
+    # -- OrderEventPort -------------------------------------------------------
+    def drain_events(self) -> list[OrderEvent]:
+        events, self._events = self._events, []
+        return events
+
+    def _emit(self, event: OrderEvent) -> None:
+        self._events.append(event)
+
+    # -- ExecutionPort --------------------------------------------------------
     def mark(self, price: float) -> None:
         self._last_price = price
         if self._position is not None:
@@ -74,8 +85,13 @@ class ExecutionLayer:
                 "keeping reservation to block a second submit",
                 symbol,
             )
-            return Fill(symbol=symbol, side=side, qty=qty, price=price)
-        return Fill(symbol=symbol, side=side, qty=snap.position.qty, price=snap.position.entry_price)
+            event = OrderEvent(symbol, side, qty, price, accepted=True)
+            self._emit(event)
+            return event.as_fill()
+        fill_price = snap.position.entry_price
+        event = OrderEvent(symbol, side, snap.position.qty, fill_price, accepted=True)
+        self._emit(event)
+        return event.as_fill()
 
     def flatten(self, symbol: str, price: float) -> Fill | None:
         if self._position is None:
@@ -96,10 +112,16 @@ class ExecutionLayer:
                 symbol,
             )
             return None
+        # Use the broker's reported close price when available, else the mark.
+        close_price = snap.position.mark_price if snap.position is not None else price
+        # Position is gone, so snap.position is None here; fall back to mark.
+        close_price = self._last_price or price
         signed = 1.0 if side is Side.LONG else -1.0
-        pnl = signed * (price - entry) * qty
+        pnl = signed * (close_price - entry) * qty
         close_side = Side.SHORT if side is Side.LONG else Side.LONG
-        return Fill(symbol=symbol, side=close_side, qty=qty, price=price, realized_pl=pnl)
+        event = OrderEvent(symbol, close_side, qty, close_price, realized_pl=pnl, accepted=True)
+        self._emit(event)
+        return event.as_fill()
 
     def reconcile(self, symbol: str) -> AccountSnapshot:
         account = self._client.get_account()

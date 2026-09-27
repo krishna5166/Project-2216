@@ -22,6 +22,51 @@ class MarketDataPort(Protocol):
         ...
 
 
+class OrderEvent:
+    """A fill or reject reported by the broker, decoupled from the request.
+
+    Instead of polling REST after submit/flatten, the execution layer can
+    push these events (Alpaca trade updates, or the simulator firing them
+    instantly). The bot consumes them to confirm fills without blocking the
+    tick loop on synchronous sleeps.
+    """
+
+    def __init__(
+        self,
+        symbol: str,
+        side: Side,
+        qty: float,
+        price: float,
+        realized_pl: float = 0.0,
+        accepted: bool = True,
+    ):
+        self.symbol = symbol
+        self.side = side
+        self.qty = qty
+        self.price = price
+        self.realized_pl = realized_pl
+        self.accepted = accepted
+
+    def as_fill(self) -> Fill | None:
+        if not self.accepted:
+            return None
+        return Fill(
+            symbol=self.symbol,
+            side=self.side,
+            qty=self.qty,
+            price=self.price,
+            realized_pl=self.realized_pl,
+        )
+
+
+class OrderEventPort(Protocol):
+    """Optional push-based fill confirmation on top of ExecutionPort."""
+
+    def drain_events(self) -> list[OrderEvent]:
+        """Return and clear any events the broker has reported since last call."""
+        ...
+
+
 class ExecutionPort(Protocol):
     """Local-state execution.
 

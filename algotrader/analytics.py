@@ -3,7 +3,7 @@
 from collections import deque
 
 from .domain import Signal, Vote
-from .features import extract_features
+from .features import N_FEATURES, extract_features
 from .models import OnlineLogisticModel
 
 
@@ -43,10 +43,16 @@ class ConformalCalibrator:
 
 
 class AnalyticalEngine:
-    def __init__(self, model=None, label_horizon: int = 5, calibration_window: int = 200):
-        self._prices: deque[float] = deque(maxlen=20)
+    def __init__(
+        self,
+        model=None,
+        label_horizon: int = 30,
+        calibration_window: int = 200,
+        n_features: int = N_FEATURES,
+    ):
+        self._prices: deque[float] = deque(maxlen=40)
         self._label_horizon = label_horizon
-        self._model = model or OnlineLogisticModel(n_features=3)
+        self._model = model or OnlineLogisticModel(n_features=n_features)
         self._calibrator = ConformalCalibrator(window=calibration_window)
         self._pending: deque[tuple[list[float], float, float, int]] = deque()
 
