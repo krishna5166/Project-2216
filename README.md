@@ -59,7 +59,15 @@ SMA-crossover strategy connected end to end, runnable either against Alpaca
   calls.
 - **Historical data fetcher** (`algotrader/historical.py`): pulls real bars
   from Alpaca into a CSV for the backtester. Needs real API keys — not
-  exercised in this environment, written so it's ready once configured.
+  exercised in this environment, written so it's ready once configured. Note:
+  this dev environment's own network policy also blocks arbitrary outbound
+  hosts (confirmed by testing a free public data source), so real market
+  data of any kind needs either broader network access granted to the
+  environment or to be fetched from a machine that has it.
+- **Performance metrics** (`algotrader/metrics.py`): every backtest reports
+  trade count, win rate, max drawdown, and Sharpe ratio — not just final
+  equity change, which tells you almost nothing about whether a result is
+  meaningful or luck.
 
 ## Setup
 
@@ -121,6 +129,17 @@ Without `MODEL_PATH` set, the analytical engine falls back to the online
 logistic model (learns live from ticks as they come in, no training step
 needed).
 
+To check the model actually generalizes rather than just memorizing the
+training data, hold out a fraction of the data for an out-of-sample backtest:
+
+```bash
+.venv/bin/python -m algotrader.train --csv history.csv --out model.json --eval-split 0.2
+```
+
+This trains only on the first 80% and immediately backtests on the held-out
+20% the model never saw during training, printing the same trade-count /
+win-rate / drawdown / Sharpe metrics.
+
 ## Tests
 
 ```bash
@@ -133,13 +152,17 @@ simulated data feed / execution layer) — none need a live API connection.
 
 ## Next steps
 
-- Actually run the backtester (and XGBoost training) against real Alpaca
-  historical data (needs keys not available in this environment) — so far
-  only exercised against a synthetic random walk and a recorded dry-run
-  session. On that synthetic data, the trained XGBoost model performed
-  *worse* than the online logistic model in a backtest — expected, since a
-  pure random walk has no real signal to learn, but a reminder that neither
-  model's predictive value on genuine market data is established yet.
+- Actually run the backtester (and XGBoost training) against real historical
+  market data. Blocked in this environment two ways: no Alpaca keys, and
+  this dev sandbox's network policy denies arbitrary outbound hosts (tested
+  against a free public data source, got a policy 403) — so even a free data
+  source needs either broader network access granted to the environment, or
+  running this step from a machine that has it. So far only exercised
+  against a synthetic random walk and a recorded dry-run session; on that
+  synthetic data, trained XGBoost performed *worse* than the online logistic
+  model — expected, since a pure random walk has no real signal to learn,
+  but a reminder that neither model's predictive value on genuine market
+  data is established yet.
 - Wire a real backend into `external_signals.py` — a Jev regime classifier
   and/or an LLM news-sentiment scorer, running as a cold-path background
   worker that calls `.set()` on its own schedule. Needs API keys/access
