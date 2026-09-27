@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 from .bot import TradingBot
 from .config import Config
+from .metrics import PerformanceMetrics, compute_metrics
 
 
 @dataclass
@@ -25,12 +26,18 @@ class BacktestResult:
     final_equity: float
     return_pct: float
     ticks_processed: int
+    metrics: PerformanceMetrics
 
     def __str__(self) -> str:
+        m = self.metrics
+        win_rate_str = f"{m.win_rate * 100:.0f}%" if m.win_rate is not None else "n/a"
+        sharpe_str = f"{m.sharpe_ratio:.3f}" if m.sharpe_ratio is not None else "n/a"
         return (
             f"Backtest: {self.ticks_processed} ticks, "
             f"equity {self.starting_equity:.2f} -> {self.final_equity:.2f} "
-            f"({self.return_pct:+.2f}%)"
+            f"({self.return_pct:+.2f}%)\n"
+            f"  trades={m.num_trades} win_rate={win_rate_str} "
+            f"max_drawdown={m.max_drawdown_pct:.2f}% sharpe={sharpe_str}"
         )
 
 
@@ -49,18 +56,22 @@ def run_backtest(prices: list[float], config: Config | None = None) -> BacktestR
 
     bot = TradingBot(config)
     starting_equity = bot.execution.get_equity()
+    equity_curve = [starting_equity]
 
     for price in prices:
         bot._on_price(config.symbol, price)
+        equity_curve.append(bot.execution.get_equity())
 
     final_equity = bot.execution.get_equity()
     return_pct = (final_equity - starting_equity) / starting_equity * 100
+    metrics = compute_metrics(equity_curve, bot.execution.trade_log)
 
     return BacktestResult(
         starting_equity=starting_equity,
         final_equity=final_equity,
         return_pct=return_pct,
         ticks_processed=len(prices),
+        metrics=metrics,
     )
 
 

@@ -46,6 +46,13 @@ def main() -> None:
     parser.add_argument("--column", default="price", help="Column name to read prices from (--csv only)")
     parser.add_argument("--label-horizon", type=int, default=5, help="Ticks ahead to label up/down")
     parser.add_argument("--out", required=True, help="Where to save the trained model")
+    parser.add_argument(
+        "--eval-split",
+        type=float,
+        default=None,
+        help="Hold out this fraction of prices (e.g. 0.2) for an out-of-sample "
+        "backtest after training, instead of only reporting training performance",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -59,9 +66,35 @@ def main() -> None:
 
         prices = list(load_ticks(args.jsonl))
 
-    model = train_xgboost_model(prices, label_horizon=args.label_horizon)
+    if args.eval_split:
+        if not 0 < args.eval_split < 1:
+            raise ValueError("--eval-split must be between 0 and 1")
+        split_idx = int(len(prices) * (1 - args.eval_split))
+        train_prices, test_prices = prices[:split_idx], prices[split_idx:]
+    else:
+        train_prices, test_prices = prices, None
+
+    model = train_xgboost_model(train_prices, label_horizon=args.label_horizon)
     model.save(args.out)
-    print(f"Trained on {len(prices)} prices, saved model to {args.out}")
+    print(f"Trained on {len(train_prices)} prices, saved model to {args.out}")
+
+    if test_prices:
+        from .backtest import run_backtest
+        from .config import Config
+
+        eval_config = Config(
+            api_key=None,
+            secret_key=None,
+            symbol="EVAL",
+            base_profit_target=1.0,
+            short_window=5,
+            long_window=20,
+            dry_run=True,
+            model_path=args.out,
+        )
+        result = run_backtest(test_prices, eval_config)
+        print(f"\nOut-of-sample evaluation ({len(test_prices)} held-out prices, never seen during training):")
+        print(result)
 
 
 if __name__ == "__main__":

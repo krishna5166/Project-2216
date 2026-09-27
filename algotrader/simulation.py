@@ -47,6 +47,7 @@ class SimulatedExecutionLayer:
     def __init__(self, starting_equity: float = 1000.0):
         self._equity = starting_equity
         self._position: _SimPosition | None = None
+        self.trade_log: list[float] = []  # realized pnl per closed trade, in order
 
     def get_equity(self) -> float:
         return self._equity
@@ -71,11 +72,8 @@ class SimulatedExecutionLayer:
 
     def close_position(self, symbol: str) -> None:
         if self._position is not None:
-            self._equity += self._position.unrealized_pl
-            logger.info(
-                "[SIM] closing %s pnl=%.2f new_equity=%.2f",
-                symbol,
-                self._position.unrealized_pl,
-                self._equity,
-            )
+            pnl = self._position.unrealized_pl
+            self._equity += pnl
+            self.trade_log.append(pnl)
+            logger.info("[SIM] closing %s pnl=%.2f new_equity=%.2f", symbol, pnl, self._equity)
         self._position = None
